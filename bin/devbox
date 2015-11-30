@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# devbox: reproducible, containerized development environments.
+#
+#   devbox init <node|python|java>   scaffold .devbox + Dockerfile.dev in the current project
+#   devbox up                        build and start the dev container (and services)
+#   devbox shell                     interactive shell inside the container
+#   devbox run <cmd...>              run a one-off command inside the container
+#   devbox test                      run the project's TEST_CMD inside the container
+#   devbox status | logs [svc] | down | clean | doctor
+set -euo pipefail
+
+DEVBOX_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=../lib/common.sh
+source "$DEVBOX_HOME/lib/common.sh"
+# shellcheck source=../lib/config.sh
+source "$DEVBOX_HOME/lib/config.sh"
+# shellcheck source=../lib/compose.sh
+source "$DEVBOX_HOME/lib/compose.sh"
+
+usage() {
+  sed -n '2,10p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+}
+
+cmd_init() {
+  local template="${1:-}"
+  [[ -n "$template" ]] || die "usage: devbox init <$(ls "$DEVBOX_HOME/templates" | tr '\n' '|' | sed 's/|$//')>"
+  [[ -d "$DEVBOX_HOME/templates/$template" ]] || die "unknown template '$template'"
+  [[ ! -f .devbox ]] || die ".devbox already exists; delete it to re-initialize"
+
+  local name
+  name="$(sanitize_name "$(basename "$PWD")")"
+  cp "$DEVBOX_HOME/templates/$template/Dockerfile.dev" ./Dockerfile.dev
+  sed "s/__NAME__/$name/g" "$DEVBOX_HOME/templates/$template/devbox.conf" > .devbox
+  ensure_gitignore ".devbox.local"
+  ok "initialized $template devbox for '$name' (edit .devbox to enable services or change ports)"
+}
+
+cmd_up() {
+  load_config
+  require_docker
+  local port
+  port="$(find_free_port "$DEVBOX_PORT")"
+  if [[ "$port" != "$DEVBOX_PORT" ]]; then
+    warn "port $DEVBOX_PORT is busy; using $port (pin it with DEVBOX_PORT in .devbox.local)"
+  fi
+  export DEVBOX_HOST_PORT="$port"
+  render_compose > "$DEVBOX_COMPOSE_FILE"
+  compose up -d --build
+  ok "$DEVBOX_NAME is up: http://localhost:$port  (devbox shell to enter)"
+}
+
+cmd_shell() {
+  load_config
+  ensure_running
+  compose exec "$DEVBOX_SERVICE" "${DEVBOX_SHELL:-bash}"
+}
+
+cmd_run() {
+  [[ $# -gt 0 ]] || die "usage: devbox run <command...>"
+  load_config
+  ensure_running
+  # -T: no TTY so output pipes cleanly in CI.
+  compose exec -T "$DEVBOX_SERVICE" sh -lc "$(quote_args "$@")"
+}
+
+cmd_test() {
+  load_config
+  [[ -n "${TEST_CMD:-}" ]] || die "TEST_CMD is not set in .devbox"
+  ensure_running
+  info "running: $TEST_CMD"
+  compose exec -T "$DEVBOX_SERVICE" sh -lc "$TEST_CMD"
+}
+
+cmd_status() {
+  load_config
+  require_docker
+  compose ps
+}
+
+cmd_logs() {
+  load_config
+  compose logs --tail=200 -f "${1:-$DEVBOX_SERVICE}"
+}
+
+cmd_down() {
+  load_config
+  compose down
+  ok "$DEVBOX_NAME stopped"
+}
+
+cmd_clean() {
+  load_config
+  confirm "remove containers, volumes and the image for $DEVBOX_NAME?" || { info "aborted"; return 0; }
+  compose down --volumes --rmi local
+  rm -f "$DEVBOX_COMPOSE_FILE"
+  ok "cleaned"
+}
+
+cmd_doctor() {
+  local failures=0
+  check() {
+    if eval "$2" >/dev/null 2>&1; then ok "$1"; else warn "$1: $3"; failures=$((failures + 1)); fi
+  }
+  check "docker installed" "command -v docker" "install Docker Desktop or docker-ce"
+  check "docker daemon reachable" "docker info" "start Docker"
+  check "compose v2 available" "docker compose version" "upgrade Docker or install the compose plugin"
+  if [[ -f .devbox ]]; then
+    load_config
+    check "port $DEVBOX_PORT free" "port_is_free $DEVBOX_PORT" "something is listening; devbox up will pick another port"
+  else
+    warn "no .devbox in $PWD (run devbox init)"
+    failures=$((failures + 1))
+  fi
+  [[ $failures -eq 0 ]] && ok "all checks passed" || { warn "$failures check(s) need attention"; return 1; }
+}
+
+main() {
+  local cmd="${1:-help}"
+  shift || true
+  case "$cmd" in
+    init) cmd_init "$@" ;;
+    up) cmd_up "$@" ;;
+    shell) cmd_shell "$@" ;;
+    run) cmd_run "$@" ;;
+    test) cmd_test "$@" ;;
+    status|ps) cmd_status "$@" ;;
+    logs) cmd_logs "$@" ;;
+    down|stop) cmd_down "$@" ;;
+    clean) cmd_clean "$@" ;;
+    doctor) cmd_doctor "$@" ;;
+    help|-h|--help) usage ;;
+    *) die "unknown command '$cmd' (see devbox help)" ;;
+  esac
+}
+
+main "$@"
