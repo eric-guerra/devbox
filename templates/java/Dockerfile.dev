@@ -1,0 +1,5 @@
+FROM maven:3.9-eclipse-temurin-21
+RUN useradd -m -u 1000 dev && mkdir -p /home/dev/.m2 && chown -R dev /home/dev
+USER dev
+ENV MAVEN_CONFIG=/home/dev/.m2
+WORKDIR /workspace
