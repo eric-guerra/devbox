@@ -1,0 +1,23 @@
+# Local Jenkins controller + Docker-capable agent, configured entirely as code (JCasC).
+services:
+  jenkins:
+    build: .
+    ports: ["8080:8080"]
+    environment:
+      CASC_JENKINS_CONFIG: /var/jenkins_home/casc/jenkins.yaml
+      JAVA_OPTS: -Djenkins.install.runSetupWizard=false
+      JENKINS_ADMIN_PASSWORD: ${JENKINS_ADMIN_PASSWORD:-change-me}
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - ./jenkins.yaml:/var/jenkins_home/casc/jenkins.yaml:ro
+  agent:
+    image: jenkins/inbound-agent:latest-jdk21
+    environment:
+      JENKINS_URL: http://jenkins:8080
+      JENKINS_AGENT_NAME: docker-agent
+      JENKINS_SECRET: ${AGENT_SECRET:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on: [jenkins]
+volumes:
+  jenkins_home:

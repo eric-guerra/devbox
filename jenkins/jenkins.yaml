@@ -1,0 +1,33 @@
+jenkins:
+  systemMessage: "Jenkins configured by JCasC (devbox)"
+  numExecutors: 0          # builds run on agents only
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: admin
+          password: ${JENKINS_ADMIN_PASSWORD}
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+  nodes:
+    - permanent:
+        name: docker-agent
+        labelString: docker
+        remoteFS: /home/jenkins/agent
+        launcher:
+          inbound: {}
+unclassified:
+  location:
+    url: http://localhost:8080/
+jobs:
+  - script: >
+      multibranchPipelineJob('devbox') {
+        branchSources {
+          git {
+            id('devbox')
+            remote('https://github.com/ericgyl817/devbox.git')
+          }
+        }
+        orphanedItemStrategy { discardOldItems { numToKeep(10) } }
+      }
